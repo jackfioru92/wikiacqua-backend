@@ -132,3 +132,10 @@ def test_le_correzioni_tolgono_le_incoerenze(tmp_path, monkeypatch):
         {"id": str(s["ID"]), "campo": "SODIO", "se_ancora": 0.01, "valore": 14.8}]})
     assert chat._scheda({k.lower(): v for k, v in {x["ID"]: x for x in guasto}[s["ID"]].items()})["incoerenze"]
     assert not chat._scheda({x["ID"]: x for x in sodio}[s["ID"]])["incoerenze"]
+
+
+def test_una_correzione_puo_svuotare_un_valore_segnaposto():
+    s = _con_nitrati()
+    regola = {"id": str(s["ID"]), "campo": "NITRATI", "se_ancora": s["NITRATI"], "valore": None}
+    out, n = integrazioni.applica(CATALOGO, [] if False else {"correggi": [regola]})
+    assert {str(x["ID"]): x for x in out}[str(s["ID"])]["NITRATI"] is None and n["corretti"] == 1

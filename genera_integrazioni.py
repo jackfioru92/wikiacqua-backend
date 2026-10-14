@@ -10,7 +10,8 @@
            non possono scontrarsi con quelli futuri del cliente
 
 Le correzioni dubbie (Santa Chianciano, Contessa, Novella, Solaria, Tosca,
-Montoso, Fonte Azzurrina, Sparea) NON sono qui: servono le etichette.
+Sparea) NON sono qui: servono le etichette. Montoso e Fonte Azzurrina sono
+svuotate (valore null) come consiglia il foglio.
 """
 import datetime
 import json
@@ -47,6 +48,16 @@ CORREZIONI = [
     (208, "RESIDUO_FISSO_A_180", 7.4, 690, "il pH era finito nella colonna del residuo fisso"),
     (208, "PH_ALLA_SORGENTE", 2.9, 7.4, "il pH era finito nella colonna del residuo fisso"),
     (216, "SODIO", 0.01, 13, "valore scritto in g/L"),
+    # Schede con numeri segnaposto: il foglio consiglia di svuotarle finche'
+    # non si ha l'etichetta. Vuote non entrano nelle classifiche per sbaglio.
+    *[(74, c, 0.1, None, "FONTE AZZURRINA: sette valori tutti 0,1, segnaposto")
+      for c in ("SODIO", "CALCIO", "MAGNESIO", "POTASSIO", "SOLFATI", "CLORURI", "NITRATI")],
+    (147, "RESIDUO_FISSO_A_180", 244, None, "MONTOSO: scheda corrotta, da rifare dall'etichetta"),
+    (147, "SODIO", 150, None, "MONTOSO: scheda corrotta, da rifare dall'etichetta"),
+    (147, "SOLFATI", 490, None, "MONTOSO: scheda corrotta, da rifare dall'etichetta"),
+    (147, "CLORURI", 26, None, "MONTOSO: scheda corrotta, da rifare dall'etichetta"),
+    (147, "TEMP_ALLA_SORGENTE", 76, None, "MONTOSO: scheda corrotta, da rifare dall'etichetta"),
+    (147, "ANIDRIDE_CARBONICA_LIBERA", 100, None, "MONTOSO: scheda corrotta, da rifare dall'etichetta"),
 ]
 
 PRIMA_ID_NUOVA = 90001      # il database del cliente non arrivera' mai qui

@@ -170,6 +170,110 @@
    "se_ancora": 0.01,
    "valore": 13,
    "motivo": "valore scritto in g/L"
+  },
+  {
+   "id": "74",
+   "nome": "FONTE AZZURRINA Sorgente Betulla",
+   "campo": "SODIO",
+   "se_ancora": 0.1,
+   "valore": null,
+   "motivo": "FONTE AZZURRINA: sette valori tutti 0,1, segnaposto"
+  },
+  {
+   "id": "74",
+   "nome": "FONTE AZZURRINA Sorgente Betulla",
+   "campo": "CALCIO",
+   "se_ancora": 0.1,
+   "valore": null,
+   "motivo": "FONTE AZZURRINA: sette valori tutti 0,1, segnaposto"
+  },
+  {
+   "id": "74",
+   "nome": "FONTE AZZURRINA Sorgente Betulla",
+   "campo": "MAGNESIO",
+   "se_ancora": 0.1,
+   "valore": null,
+   "motivo": "FONTE AZZURRINA: sette valori tutti 0,1, segnaposto"
+  },
+  {
+   "id": "74",
+   "nome": "FONTE AZZURRINA Sorgente Betulla",
+   "campo": "POTASSIO",
+   "se_ancora": 0.1,
+   "valore": null,
+   "motivo": "FONTE AZZURRINA: sette valori tutti 0,1, segnaposto"
+  },
+  {
+   "id": "74",
+   "nome": "FONTE AZZURRINA Sorgente Betulla",
+   "campo": "SOLFATI",
+   "se_ancora": 0.1,
+   "valore": null,
+   "motivo": "FONTE AZZURRINA: sette valori tutti 0,1, segnaposto"
+  },
+  {
+   "id": "74",
+   "nome": "FONTE AZZURRINA Sorgente Betulla",
+   "campo": "CLORURI",
+   "se_ancora": 0.1,
+   "valore": null,
+   "motivo": "FONTE AZZURRINA: sette valori tutti 0,1, segnaposto"
+  },
+  {
+   "id": "74",
+   "nome": "FONTE AZZURRINA Sorgente Betulla",
+   "campo": "NITRATI",
+   "se_ancora": 0.1,
+   "valore": null,
+   "motivo": "FONTE AZZURRINA: sette valori tutti 0,1, segnaposto"
+  },
+  {
+   "id": "147",
+   "nome": "MONTOSO",
+   "campo": "RESIDUO_FISSO_A_180",
+   "se_ancora": 244,
+   "valore": null,
+   "motivo": "MONTOSO: scheda corrotta, da rifare dall'etichetta"
+  },
+  {
+   "id": "147",
+   "nome": "MONTOSO",
+   "campo": "SODIO",
+   "se_ancora": 150,
+   "valore": null,
+   "motivo": "MONTOSO: scheda corrotta, da rifare dall'etichetta"
+  },
+  {
+   "id": "147",
+   "nome": "MONTOSO",
+   "campo": "SOLFATI",
+   "se_ancora": 490,
+   "valore": null,
+   "motivo": "MONTOSO: scheda corrotta, da rifare dall'etichetta"
+  },
+  {
+   "id": "147",
+   "nome": "MONTOSO",
+   "campo": "CLORURI",
+   "se_ancora": 26,
+   "valore": null,
+   "motivo": "MONTOSO: scheda corrotta, da rifare dall'etichetta"
+  },
+  {
+   "id": "147",
+   "nome": "MONTOSO",
+   "campo": "TEMP_ALLA_SORGENTE",
+   "se_ancora": 76,
+   "valore": null,
+   "motivo": "MONTOSO: scheda corrotta, da rifare dall'etichetta"
+  },
+  {
+   "id": "147",
+   "nome": "MONTOSO",
+   "campo": "ANIDRIDE_CARBONICA_LIBERA",
+   "se_ancora": 100,
+   "valore": null,
+   "motivo": "MONTOSO: scheda corrotta, da rifare dall'etichetta"
   }
  ],
  "nuove": [
