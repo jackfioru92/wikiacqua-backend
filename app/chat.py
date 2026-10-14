@@ -1386,6 +1386,16 @@ class Richiesta(BaseModel):
     storico: list[Turno] = Field(default_factory=list, max_length=6)
 
 
+def testo_esclusi(n: int) -> str:
+    if n == 1:
+        return ("Ho escluso 1 acqua che rientrerebbe nei criteri perché i suoi "
+                "dati nel catalogo risultano incoerenti (da verificare "
+                "sull'etichetta).")
+    return (f"Ho escluso {n} acque che rientrerebbero nei criteri perché i "
+            "loro dati nel catalogo risultano incoerenti (da verificare "
+            "sull'etichetta).")
+
+
 def _esito(testo, schede, fuori_tema, modalita) -> dict:
     return {"risposta": testo, "fuori_tema": fuori_tema, "modalita": modalita,
             "ignorato_altro": False,
@@ -1492,13 +1502,15 @@ async def chat(req: Richiesta, request: Request):
                 testo = ("Nessuna acqua del catalogo soddisfa questi criteri: "
                          f"{descrivi_criteri(piano)}. Prova ad allentarne uno.")
                 if ris.get("esclusi"):
-                    testo += (f" ({ris['esclusi']} escluse per dati incoerenti "
-                              "nel catalogo.)")
+                    n = ris["esclusi"]
+                    testo += (f" ({n} esclusa per dati incoerenti nel catalogo.)"
+                              if n == 1 else
+                              f" ({n} escluse per dati incoerenti nel catalogo.)")
             else:
                 testo = ("Non trovo nel catalogo: "
                          f"{', '.join(ris['non_trovate']) or 'nessun nome indicato'}"
-                         ". Controlla il nome oppure cercalo nella sezione "
-                         "Cerca dell'app.")
+                         ". Controlla il nome oppure cercalo con la barra "
+                         "di ricerca della Home.")
             esito = _esito(testo, [], False, "fissa")
         else:
             if da_locale:           # senza modello: solo i dati
@@ -1514,9 +1526,7 @@ async def chat(req: Richiesta, request: Request):
     if ris and esito["acque"]:
         note = []
         if ris.get("esclusi"):
-            note.append(f"Ho escluso {ris['esclusi']} acque che rientrerebbero "
-                        "nei criteri perché i loro dati nel catalogo risultano "
-                        "incoerenti (da verificare sull'etichetta).")
+            note.append(testo_esclusi(ris["esclusi"]))
         for nome, motivi in ris.get("incoerenti", []):
             note.append(f"Attenzione: i dati di {nome} nel catalogo risultano "
                         f"incoerenti ({'; '.join(motivi)}): verifica sull'etichetta.")

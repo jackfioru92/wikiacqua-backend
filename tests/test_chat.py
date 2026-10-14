@@ -1397,3 +1397,18 @@ def test_senza_google_la_definizione_non_porta_la_nota_della_risposta_essenziale
         assert j["modalita"] in ("locale", "fissa")      # "Ciao!" non chiama nemmeno il modello
     _, r = _google_giu(client, monkeypatch, "Confronta Ferrarelle e Levissima")
     assert chat.NOTA_ESSENZIALE in r.json()["risposta"]
+
+
+def test_l_acqua_esclusa_e_al_singolare_quando_e_una_sola():
+    """"1 acque che rientrerebbero" non si puo' leggere."""
+    assert chat.testo_esclusi(1).startswith("Ho escluso 1 acqua che rientrerebbe ")
+    assert "i suoi dati" in chat.testo_esclusi(1)
+    assert chat.testo_esclusi(2).startswith("Ho escluso 2 acque che rientrerebbero ")
+
+
+def test_il_rimando_per_un_nome_non_trovato_indica_un_punto_che_esiste_nell_app(client, monkeypatch):
+    """Nell'app non c'e' una sezione "Cerca": c'e' la barra di ricerca della Home."""
+    finto = Finto({"azione": "scheda", "acque": ["Acquamarina Inesistente"]})
+    t = chiedi(client, finto, monkeypatch).json()["risposta"]
+    assert "Non trovo nel catalogo" in t and "barra di ricerca della Home" in t
+    assert "sezione Cerca" not in t
