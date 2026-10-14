@@ -1543,7 +1543,10 @@ async def chat(req: Richiesta, request: Request):
     if esito["acque"] and avviso:
         esito["risposta"] += "\n\n" + avviso
     if da_locale:
-        esito["risposta"] += "\n\n" + NOTA_ESSENZIALE
+        # Saluto, ringraziamento, rifiuto e definizione non perdono nulla senza
+        # il modello: la nota "risposta essenziale" li renderebbe incompleti.
+        if azione not in ("glossario", "saluto", "grazie", "fuori_tema"):
+            esito["risposta"] += "\n\n" + NOTA_ESSENZIALE
         esito["modalita"] = "locale"
     if piano["extra"] and azione != "fuori_tema":
         esito["risposta"] += "\n\n" + IGNORATO

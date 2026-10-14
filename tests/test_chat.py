@@ -1385,3 +1385,15 @@ def test_il_tetto_per_utente_non_si_aggira_inventando_x_forwarded_for(client, mo
 def test_le_statistiche_non_sono_pubbliche(client):
     assert client.get("/chat/stato").status_code == 200                       # sul server
     assert client.get("/chat/stato", headers={"x-real-ip": "203.0.113.7"}).status_code == 404   # da nginx
+
+
+def test_senza_google_la_definizione_non_porta_la_nota_della_risposta_essenziale(client, monkeypatch):
+    """Definizione e saluto sono complete anche senza il modello: la nota
+    "risposta essenziale" va solo sulle risposte fatte di soli dati."""
+    for domanda in ("Cosa significa residuo fisso?", "Ciao!", "Grazie mille"):
+        _, r = _google_giu(client, monkeypatch, domanda)
+        j = r.json()
+        assert r.status_code == 200 and chat.NOTA_ESSENZIALE not in j["risposta"], domanda
+        assert j["modalita"] in ("locale", "fissa")      # "Ciao!" non chiama nemmeno il modello
+    _, r = _google_giu(client, monkeypatch, "Confronta Ferrarelle e Levissima")
+    assert chat.NOTA_ESSENZIALE in r.json()["risposta"]
