@@ -1,0 +1,466 @@
+"""Servizio di riconoscimento etichette per WikiAcqua.
+
+Sostituisce il vecchio AI-Bottiglie.php: riceve la foto scattata dall'app,
+la inoltra a Google Gemini e restituisce la risposta **così com'è**, perché
+l'app legge candidates[0].content.parts[0].text.
+
+Girava su un IP in HTTP puro (bloccato da Android 9+); qui sta dietro nginx
+in HTTPS su wikideas.it/wikiacqua/ai/.
+"""
+import base64
+import datetime
+import hashlib
+import json
+import os
+import re
+import time
+
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
+
+API_KEY = os.environ.get("GEMINI_API_KEY", "")
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite")
+
+# gemini-2.5-flash (usato dal vecchio PHP) non è più disponibile per le chiavi
+# API create di recente: restituisce 404 NOT_FOUND.
+GEMINI_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    "{model}:generateContent?key={key}"
+)
+
+PROMPT = (
+    "STEP 1 - Look carefully: does this image show a bottle of water or a "
+    "water label?\n"
+    "If it does NOT (it shows a person, an object, a logo, a screenshot, "
+    "food, an animal, a landscape, or anything else), you MUST answer "
+    "exactly: NESSUNA\n"
+    "Never invent or guess a brand for an image that is not a water bottle. "
+    "Answering NESSUNA is the correct answer in that case.\n\n"
+    "STEP 2 - Only if it IS a water bottle or water label: read the brand "
+    "printed on it and answer with ONLY the italian brand name in CAPS. "
+    "You may complete the name if a few letters are unreadable, but the "
+    "name must actually be printed on the label. Use extended names.\n\n"
+    "No explanation, no punctuation, no markdown: either NESSUNA or the "
+    "brand name.\n\n"
+)
+
+# Risposta convenuta quando la foto non ritrae un'etichetta d'acqua.
+NON_ETICHETTA = "NESSUNA"
+
+# Campi dell'analisi chimica, con gli stessi nomi usati dal database.
+CAMPI = [
+    "NOME_ETICHETTA", "CLASSIFICAZIONE", "TEMP_ALLA_SORGENTE",
+    "RESIDUO_FISSO_A_180", "PH_ALLA_SORGENTE", "OSSIDABILITA",
+    "ANIDRIDE_CARBONICA_LIBERA", "CALCIO", "SODIO", "MAGNESIO", "POTASSIO",
+    "BICARBONATI", "SOLFATI", "CLORURI", "NITRATI", "FLUORURI", "SILICE",
+    "STRONZIO",
+]
+
+PROMPT_ANALISI = (
+    "Read the chemical analysis printed on this italian mineral water "
+    "label. Return ONLY a JSON object, no markdown fences, with exactly "
+    "these keys: " + ", ".join(CAMPI) + ".\n"
+    "Use null for every value that is not printed on the label - never "
+    "invent or estimate a value. Numbers as plain decimals without units "
+    "(use a dot for decimals). NOME_ETICHETTA and CLASSIFICAZIONE are text."
+)
+
+# L'app comprime già le foto; oltre questa soglia rifiutiamo per non pagare
+# chiamate inutili a Gemini.
+MAX_BYTES = 8 * 1024 * 1024
+
+# Archivio scansioni. Teniamo **solo** le etichette d'acqua che ancora non
+# abbiamo in catalogo: servono ad ampliare l'archivio. Tutto il resto (foto
+# scattate per errore, oggetti, persone) non viene mai scritto su disco.
+SALVA = os.environ.get("SALVA_SCANSIONI", "1") != "0"
+ARCHIVIO = os.environ.get("ARCHIVIO_SCANSIONI", "/opt/wikiacqua-ai/scansioni")
+# Copertine già in nostro possesso: se l'acqua è qui, la foto non serve.
+CATALOGO = os.environ.get(
+    "CATALOGO_IMMAGINI", "/var/www/html/wikiacqua/images/labels"
+)
+
+app = FastAPI(title="WikiAcqua AI", docs_url=None, redoc_url=None)
+
+
+@app.middleware("http")
+async def diagnostica_400(request, call_next):
+    """Registra le richieste rifiutate: senza questo non si capisce cosa
+    stia mandando davvero il telefono."""
+    risposta = await call_next(request)
+    if risposta.status_code >= 400:
+        print(
+            "RIFIUTATA",
+            risposta.status_code,
+            "| content-type:", request.headers.get("content-type"),
+            "| lunghezza:", request.headers.get("content-length"),
+            "| agent:", request.headers.get("user-agent"),
+            flush=True,
+        )
+    return risposta
+
+# Cache dei nomi già in catalogo, rinfrescata di rado: la cartella cambia
+# solo con il sync notturno.
+_catalogo: set[str] = set()
+_catalogo_letto = 0.0
+
+
+def _chiave(nome: str) -> str:
+    """Confronto indulgente: ignora maiuscole, spazi, punteggiatura e il
+    prefisso 'ACQUA', così 'Acqua Ferrarelle' e 'FERRARELLE' coincidono."""
+    k = re.sub(r"[^A-Z0-9]", "", (nome or "").upper())
+    return k[5:] if k.startswith("ACQUA") and len(k) > 5 else k
+
+
+def catalogo() -> set[str]:
+    global _catalogo, _catalogo_letto
+    adesso = time.time()
+    if _catalogo and adesso - _catalogo_letto < 600:
+        return _catalogo
+    try:
+        nomi = {
+            _chiave(os.path.splitext(f)[0])
+            for f in os.listdir(CATALOGO)
+            if f.lower().endswith((".jpg", ".jpeg", ".png"))
+        }
+        _catalogo = {n for n in nomi if n}
+        _catalogo_letto = adesso
+    except OSError:
+        pass
+    return _catalogo
+
+
+def da_conservare(riconosciuta: str) -> bool:
+    """Vale la pena tenere questa foto?
+
+    Sì solo se ritrae un'etichetta d'acqua che non abbiamo già: è l'unico
+    caso in cui aggiunge qualcosa all'archivio.
+    """
+    testo = (riconosciuta or "").strip()
+    if not testo or testo.upper() == NON_ETICHETTA:
+        return False
+    # Risposte lunghe o discorsive: non è un nome di marca.
+    if len(testo) > 60 or "\n" in testo:
+        return False
+    chiave = _chiave(testo)
+    if not chiave:
+        return False
+    return chiave not in catalogo()
+
+
+def tipo_immagine(dati: bytes, dichiarato: str = "") -> str:
+    """Riconosce il formato guardando i primi byte del file.
+
+    L'app allega la foto senza dichiararne il tipo, quindi arriva come
+    application/octet-stream: Gemini rifiuta quel tipo con un 400. Qui il
+    formato viene dedotto dal contenuto, che è comunque più affidabile di
+    quanto dichiara il client.
+    """
+    if dati[:4] == bytes([0x89, 0x50, 0x4E, 0x47]):
+        return "image/png"
+    if dati[:3] == bytes([0xFF, 0xD8, 0xFF]):
+        return "image/jpeg"
+    if dati[:4] == b"RIFF" and dati[8:12] == b"WEBP":
+        return "image/webp"
+    if dati[4:12] in (b"ftypheic", b"ftypheix", b"ftyphevc", b"ftypmif1"):
+        return "image/heic"
+    if dati[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    # Nessuna firma riconosciuta: si tiene il dichiarato solo se è
+    # un'immagine, altrimenti si tenta con JPEG.
+    if dichiarato.startswith("image/") and "octet" not in dichiarato:
+        return dichiarato
+    return "image/jpeg"
+
+
+def _nome_file(testo: str) -> str:
+    """Nome di file prudente a partire dalla risposta del modello."""
+    pulito = re.sub(r"[^A-Za-z0-9 _-]", "", (testo or "").strip())[:60]
+    return pulito.replace(" ", "_") or "non_riconosciuta"
+
+
+def archivia(dati: bytes, riconosciuta: str, mime: str,
+             analisi: dict | None = None, forza: bool = False) -> None:
+    """Salva la foto solo se è un'etichetta che ci manca.
+
+    Insieme alla foto viene scritta l'analisi letta dall'etichetta: è una
+    scheda già compilata, da rivedere prima di finire in archivio.
+
+    Non deve mai far fallire la risposta all'utente: in caso di problemi si
+    prosegue in silenzio.
+    """
+    # `forza` serve alla foto del retro: l'utente l'ha scattata apposta per
+    # un'acqua che sappiamo già mancare, non va rivalutata.
+    if not SALVA or (not forza and not da_conservare(riconosciuta)):
+        return
+    try:
+        giorno = datetime.datetime.now().strftime("%Y-%m-%d")
+        cartella = os.path.join(ARCHIVIO, giorno)
+        os.makedirs(cartella, exist_ok=True)
+
+        # L'impronta del contenuto evita di riempire il disco con la stessa
+        # foto inviata più volte.
+        impronta = hashlib.sha256(dati).hexdigest()[:16]
+        est = ".png" if "png" in (mime or "") else ".jpg"
+        nome = f"{_nome_file(riconosciuta)}__{impronta}{est}"
+        percorso = os.path.join(cartella, nome)
+
+        if not os.path.exists(percorso):
+            with open(percorso, "wb") as f:
+                f.write(dati)
+
+        # Scheda affiancata alla foto, pronta per la revisione.
+        if analisi:
+            with open(
+                os.path.splitext(percorso)[0] + ".json", "w", encoding="utf-8"
+            ) as f:
+                json.dump(analisi, f, ensure_ascii=False, indent=2)
+
+        with open(os.path.join(ARCHIVIO, "indice.jsonl"), "a") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "quando": datetime.datetime.now().isoformat(
+                            timespec="seconds"
+                        ),
+                        "riconosciuta": (riconosciuta or "").strip(),
+                        "file": os.path.join(giorno, nome),
+                        "byte": len(dati),
+                        "valori_letti": sum(
+                            1 for v in (analisi or {}).values() if v not in
+                            (None, "", "null")
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+
+
+def _testo_risposta(payload: dict) -> str:
+    try:
+        return payload["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+async def leggi_analisi(dati: bytes, mime: str) -> dict | None:
+    """Estrae dall'etichetta la tabella dell'analisi chimica.
+
+    Si usa solo per le acque che non abbiamo: l'obiettivo è preparare una
+    scheda già compilata da rivedere prima di inserirla in archivio.
+    """
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": PROMPT_ANALISI},
+                    {
+                        "inlineData": {
+                            "mimeType": tipo_immagine(dati, mime or ""),
+                            "data": base64.b64encode(dati).decode(),
+                        }
+                    },
+                ]
+            }
+        ],
+        # Temperatura bassa: qui si trascrive, non si interpreta.
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 2048},
+    }
+    url = GEMINI_URL.format(model=MODEL, key=API_KEY)
+    transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
+    try:
+        async with httpx.AsyncClient(timeout=90, transport=transport) as c:
+            r = await c.post(url, json=payload)
+        testo = _testo_risposta(r.json())
+    except Exception:
+        return None
+
+    # Il modello a volte incornicia il JSON in un blocco markdown.
+    testo = re.sub(r"^```(?:json)?|```$", "", testo.strip(),
+                   flags=re.MULTILINE).strip()
+    try:
+        letto = json.loads(testo)
+    except ValueError:
+        return None
+    if not isinstance(letto, dict):
+        return None
+    return {k: letto.get(k) for k in CAMPI}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "model": MODEL, "key_configured": bool(API_KEY)}
+
+
+@app.post("/retro")
+async def foto_retro(
+    file: UploadFile = File(...),
+    marca: str = Form(...),
+):
+    """Riceve la foto del retro di un'acqua che non abbiamo in catalogo.
+
+    L'analisi chimica è quasi sempre stampata qui, non sul fronte: è
+    questa la foto che permette di compilare davvero la scheda.
+    """
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="chiave Gemini non configurata")
+
+    dati = await file.read()
+    if not dati:
+        raise HTTPException(status_code=400, detail="file vuoto")
+    if len(dati) > MAX_BYTES:
+        raise HTTPException(status_code=413, detail="immagine troppo grande")
+
+    analisi = await leggi_analisi(dati, file.content_type or "")
+    letti = sum(
+        1 for v in (analisi or {}).values() if v not in (None, "", "null")
+    )
+    if analisi:
+        # Il nome viene dal fronte, che è più affidabile per la marca.
+        analisi["NOME_ETICHETTA"] = marca.strip() or analisi.get(
+            "NOME_ETICHETTA"
+        )
+        archivia(dati, f"{marca.strip()} (retro)", file.content_type or "",
+                 analisi, forza=True)
+
+    return {"valori_letti": letti}
+
+
+@app.get("/proposte")
+async def proposte():
+    """Acque nuove raccolte dalle scansioni, con l'analisi già trascritta.
+
+    È materiale da rivedere prima di inserirlo in archivio: i valori sono
+    letti da una foto, quindi vanno confrontati con l'etichetta.
+    """
+    elenco = []
+    for radice, _, files in os.walk(ARCHIVIO):
+        for f in sorted(files):
+            if not f.endswith(".json"):
+                continue
+            percorso = os.path.join(radice, f)
+            try:
+                with open(percorso, encoding="utf-8") as fh:
+                    dati = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            compilati = {
+                k: v for k, v in dati.items() if v not in (None, "", "null")
+            }
+            elenco.append(
+                {
+                    "foto": os.path.relpath(
+                        os.path.splitext(percorso)[0], ARCHIVIO
+                    ),
+                    "valori_letti": len(compilati),
+                    "analisi": dati,
+                }
+            )
+    return {"proposte": len(elenco), "elenco": elenco}
+
+
+@app.get("/statistiche")
+async def statistiche():
+    """Etichette raccolte che non erano in catalogo.
+
+    Sono le sole foto conservate: dicono quali acque manca ancora di
+    inserire nell'archivio.
+    """
+    indice = os.path.join(ARCHIVIO, "indice.jsonl")
+    if not os.path.exists(indice):
+        return {"scansioni": 0, "in_catalogo": len(catalogo()), "marche": {}}
+    conteggio: dict[str, int] = {}
+    totale = 0
+    with open(indice, encoding="utf-8") as f:
+        for riga in f:
+            try:
+                voce = json.loads(riga)
+            except ValueError:
+                continue
+            totale += 1
+            nome = (voce.get("riconosciuta") or "?").strip() or "?"
+            conteggio[nome] = conteggio.get(nome, 0) + 1
+    prime = dict(
+        sorted(conteggio.items(), key=lambda kv: kv[1], reverse=True)[:40]
+    )
+    return {"scansioni": totale, "marche_distinte": len(conteggio),
+            "piu_frequenti": prime}
+
+
+@app.post("/")
+async def foto_a_label(
+    file: UploadFile = File(...),
+    option: str = Form("foto-a-label"),
+):
+    if option != "foto-a-label":
+        raise HTTPException(status_code=400, detail="option non valida")
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="chiave Gemini non configurata")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="file vuoto")
+    if len(data) > MAX_BYTES:
+        raise HTTPException(status_code=413, detail="immagine troppo grande")
+
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": PROMPT},
+                    {
+                        "inlineData": {
+                            "mimeType": tipo_immagine(
+                                data, file.content_type or ""
+                            ),
+                            "data": base64.b64encode(data).decode(),
+                        }
+                    },
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.4,
+            "topK": 32,
+            "topP": 1,
+            "maxOutputTokens": 4096,
+        },
+    }
+
+    url = GEMINI_URL.format(model=MODEL, key=API_KEY)
+    # Google blocca la rete IPv6 di OVH (403 dall'edge): legandoci a 0.0.0.0
+    # le richieste escono in IPv4, che invece passa.
+    transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
+    try:
+        async with httpx.AsyncClient(timeout=60, transport=transport) as client:
+            r = await client.post(url, json=payload)
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Gemini irraggiungibile: {exc}")
+
+    # La risposta viene restituita invariata: l'app si aspetta il formato Gemini.
+    # Se Gemini risponde con HTML (es. 403 dall'edge di Google quando l'IP del
+    # server è bloccato) non c'è JSON da inoltrare: meglio un errore leggibile
+    # che uno stack trace.
+    try:
+        corpo = r.json()
+    except ValueError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"risposta non-JSON da Gemini (HTTP {r.status_code})",
+        )
+
+    if r.status_code == 200:
+        marca = _testo_risposta(corpo)
+        # Solo per le acque che non abbiamo vale la pena spendere una
+        # seconda chiamata per leggere l'analisi dall'etichetta.
+        analisi = (
+            await leggi_analisi(data, file.content_type or "")
+            if da_conservare(marca)
+            else None
+        )
+        archivia(data, marca, file.content_type or "", analisi)
+
+    return JSONResponse(status_code=r.status_code, content=corpo)
