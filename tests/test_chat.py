@@ -1412,3 +1412,23 @@ def test_il_rimando_per_un_nome_non_trovato_indica_un_punto_che_esiste_nell_app(
     t = chiedi(client, finto, monkeypatch).json()["risposta"]
     assert "Non trovo nel catalogo" in t and "barra di ricerca della Home" in t
     assert "sezione Cerca" not in t
+
+
+def test_ph_si_riconosce_come_parola_intera(client, monkeypatch):
+    """"photosynthesis" inizia per "ph" ma non e' il pH."""
+    schede = asyncio.run(chat.catalogo())
+    voci = asyncio.run(chat.enciclopedia())
+    assert chat.cerca_voce("Cosa significa photosynthesis?", {}, voci) == (None, None)
+    assert chat.cerca_voce("Cosa significa pH?", {}, voci)[0]["campo"] == "ph_alla_sorgente"
+    assert chat.cerca_voce("Cosa significa PH sorgente?", {}, voci)[0]["campo"] == "ph_alla_sorgente"
+
+
+def test_un_valore_preciso_non_porta_le_categorie_d_uso(client, monkeypatch):
+    finto = Finto({"azione": "scheda", "acque": ["Ferrarelle"], "parametri": ["magnesio"]},
+                  ["FERRARELLE: il magnesio e' 25 mg/L."])
+    t = chiedi(client, finto, monkeypatch, "Dimmi quanto magnesio c'e' nella Ferrarelle").json()["risposta"]
+    assert "Rientra nelle categorie" not in t and "Non rientra" not in t
+    finto = Finto({"azione": "scheda", "acque": ["Ferrarelle"], "parametri": ["magnesio"]},
+                  ["FERRARELLE: il magnesio e' 25 mg/L."])
+    t = chiedi(client, finto, monkeypatch, "Il magnesio della Ferrarelle e' adatto agli sportivi?").json()["risposta"]
+    assert "Rientra nelle categorie" in t

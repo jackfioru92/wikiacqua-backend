@@ -374,7 +374,12 @@ def cerca_voce(domanda: str, piano: dict, voci: list[dict]):
         if c in voce:
             return voce[c], None
     for campo, prefissi in PREFISSI_PARAMETRI:
-        if campo in voce and any(w.startswith(p) for w in parole for p in prefissi):
+        if campo not in voce:
+            continue
+        # "ph" e' una parola sola: come prefisso prenderebbe anche "photo".
+        trovato = ("ph" in parole if campo == "ph_alla_sorgente"
+                   else any(w.startswith(p) for w in parole for p in prefissi))
+        if trovato:
             return voce[campo], None
     for prefissi, chiave in ALIAS_VOCI:
         if chiave in voce and any(w.startswith(p) for w in parole for p in prefissi):
@@ -1386,6 +1391,15 @@ class Richiesta(BaseModel):
     storico: list[Turno] = Field(default_factory=list, max_length=6)
 
 
+PAROLE_CATEGORIE_USO = ("benefic", "adatt", "indicat", "consigl", "serve", "utile",
+                        "propriet", "caratteristic", "chi ", "fa bene", "buona per")
+
+
+def chiede_categorie(domanda: str) -> bool:
+    t = " ".join(_parole(domanda)) + " "
+    return any(p in t for p in PAROLE_CATEGORIE_USO)
+
+
 def testo_esclusi(n: int) -> str:
     if n == 1:
         return ("Ho escluso 1 acqua che rientrerebbe nei criteri perché i suoi "
@@ -1538,7 +1552,11 @@ async def chat(req: Richiesta, request: Request):
         None) if azione == "scheda" and len(esito["acque"]) == 1 else None
     # Se i dati dell'acqua sono incoerenti non si dice a chi serve: sarebbe
     # una classificazione costruita su numeri che non possono essere giusti.
-    if scheda_unica and not scheda_unica["incoerenze"]:
+    # Chi chiede un valore preciso ("quanto magnesio nella Ferrarelle?") non
+    # vuole sapere in che categorie rientra l'acqua; chi chiede benefici o a
+    # chi e' adatta, si'.
+    if (scheda_unica and not scheda_unica["incoerenze"]
+            and (not piano["parametri"] or chiede_categorie(domanda))):
         s = scheda_unica
         cate = [(k, c) for k, c in CATEGORIE.items() if c.criterio(s)]
         neonati_nella_scheda = any(k == "neonati" for k, _ in cate)
