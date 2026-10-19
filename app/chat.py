@@ -750,35 +750,72 @@ def _dettaglio_http(r: httpx.Response) -> str:
     return f"HTTP {r.status_code} {stato}".strip()
 
 
-# Pause prima del 2o e del 3o tentativo. Si riprova solo sugli errori 5xx di
-# Google (es. 503 UNAVAILABLE): sono passeggeri e non vengono fatturati.
+# Pause prima del 2o e del 3o tentativo. Si riprova solo sugli errori 5xx
+# (es. 503 UNAVAILABLE): sono passeggeri e non vengono fatturati. Con piu'
+# motori a disposizione non si aspetta: si passa subito al successivo.
 PAUSE_RIPROVA = (1.5, 4.0)
+
+# Motori di riserva. Se quello principale non risponde la domanda passa al
+# successivo invece di fallire. Si configurano da ambiente:
+#   GEMINI_MODELLI_RISERVA  altri modelli Google, stessa chiave (separati da virgola)
+#   LLM_RISERVA_KEY         chiave di un servizio esterno compatibile OpenAI
+#                           (DeepSeek, Mistral, Groq...); senza chiave non si usa
+#   LLM_RISERVA_URL, LLM_RISERVA_MODELLO
+RISERVE_GEMINI = [m.strip() for m in os.environ.get(
+    "GEMINI_MODELLI_RISERVA", "gemini-3.1-flash-lite-preview,gemini-3.5-flash"
+).split(",") if m.strip()]
+LLM2_KEY = os.environ.get("LLM_RISERVA_KEY", "")
+LLM2_URL = os.environ.get("LLM_RISERVA_URL",
+                          "https://api.deepseek.com/chat/completions")
+LLM2_MODELLO = os.environ.get("LLM_RISERVA_MODELLO", "deepseek-chat")
+PAUSA_MOTORE_GUASTO = 45.0
+
+_motore_guasto: dict[str, float] = {}   # nome -> fino a quando va in fondo alla fila
+_per_motore: dict[str, int] = {}        # risposte date da ciascun motore
+# Errori della risposta e non del servizio: non dicono che il motore e' giu'.
+ERRORI_DI_CONTENUTO = {"risposta vuota", "risposta troncata", "KeyError",
+                       "IndexError", "ValueError", "TypeError"}
+
+
+def _motori() -> list[tuple[str, str]]:
+    """(nome, tipo) in ordine di preferenza. Chi di recente non ha risposto
+    scende in fondo: durante un'interruzione di Google le domande successive
+    vanno subito alla riserva, senza perdere secondi."""
+    elenco = [(MODEL, "gemini")]
+    elenco += [(m, "gemini") for m in RISERVE_GEMINI if m != MODEL]
+    if LLM2_KEY:
+        elenco.append((LLM2_MODELLO, "esterno"))
+    adesso = time.time()
+    return sorted(elenco, key=lambda m: _motore_guasto.get(m[0], 0.0) > adesso)
 
 
 async def _invia(url: str, corpo: dict, scadenza: float,
-                 timeout: float = 25.0) -> httpx.Response:
-    for tentativo in range(len(PAUSE_RIPROVA) + 1):
+                 timeout: float = 25.0, intestazioni: dict | None = None,
+                 riprove: int | None = None) -> httpx.Response:
+    riprove = len(PAUSE_RIPROVA) if riprove is None else riprove
+    intestazioni = intestazioni or {"x-goog-api-key": API_KEY}
+    for tentativo in range(riprove + 1):
         residuo = scadenza - time.time()
         if residuo < 2:
             raise GeminiErrore("tempo esaurito")
         _uso["chiamate"] += 1
         async with httpx.AsyncClient(timeout=min(timeout, residuo),
                                      transport=_ipv4()) as c:
-            r = await c.post(url, json=corpo,
-                             headers={"x-goog-api-key": API_KEY})
-        if r.status_code < 500 or tentativo == len(PAUSE_RIPROVA):
+            r = await c.post(url, json=corpo, headers=intestazioni)
+        if r.status_code < 500 or tentativo == riprove:
             return r
         # Senza questa riga le ripetizioni sono invisibili e Google puo'
         # essere lento per giorni senza che nessuno se ne accorga.
-        print("CHAT Gemini", _dettaglio_http(r), "- riprovo", flush=True)
-        await asyncio.sleep(PAUSE_RIPROVA[tentativo])
+        print("CHAT motore", _dettaglio_http(r), "- riprovo", flush=True)
+        await asyncio.sleep(PAUSE_RIPROVA[min(tentativo,
+                                              len(PAUSE_RIPROVA) - 1)])
     return r
 
 
-async def _gemini(prompt: str, *, sistema: str, schema: dict | None = None,
-                  max_token: int = 1024, temperatura: float = 0.2,
-                  scadenza: float | None = None,
-                  timeout: float = 25.0) -> str:
+async def _chiama_gemini(modello: str, prompt: str, *, sistema: str,
+                         schema: dict | None, max_token: int,
+                         temperatura: float, scadenza: float, timeout: float,
+                         riprove: int) -> str:
     cfg = {"temperature": temperatura, "maxOutputTokens": max_token}
     if schema:
         cfg["responseMimeType"] = "application/json"
@@ -788,10 +825,9 @@ async def _gemini(prompt: str, *, sistema: str, schema: dict | None = None,
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": cfg,
     }
-    url = f"{GEMINI_BASE}/models/{MODEL}:generateContent"
+    url = f"{GEMINI_BASE}/models/{modello}:generateContent"
     try:
-        r = await _invia(url, corpo, scadenza or time.time() + BUDGET,
-                         timeout)
+        r = await _invia(url, corpo, scadenza, timeout, riprove=riprove)
         r.raise_for_status()
         corpo_r = r.json()
         uso = corpo_r.get("usageMetadata") or {}
@@ -812,6 +848,84 @@ async def _gemini(prompt: str, *, sistema: str, schema: dict | None = None,
     if not testo.strip():
         raise GeminiErrore("risposta vuota")
     return testo
+
+
+async def _chiama_esterno(prompt: str, *, sistema: str, schema: dict | None,
+                          max_token: int, temperatura: float,
+                          scadenza: float, timeout: float,
+                          riprove: int) -> str:
+    """Servizio compatibile con l'API di OpenAI (DeepSeek, Mistral, Groq...).
+    Non conosce lo schema di Gemini: lo si descrive nelle istruzioni e si
+    chiede JSON; il piano che ne esce e' comunque ricontrollato da
+    _piano_valido, come per Gemini."""
+    if schema:
+        sistema += ("\n\nRispondi SOLO con un oggetto JSON valido, senza altro "
+                    "testo. Struttura (JSON Schema): "
+                    + json.dumps(schema, ensure_ascii=False))
+    corpo = {"model": LLM2_MODELLO, "temperature": temperatura,
+             "max_tokens": max_token,
+             "messages": [{"role": "system", "content": sistema},
+                          {"role": "user", "content": prompt}]}
+    if schema:
+        corpo["response_format"] = {"type": "json_object"}
+    try:
+        r = await _invia(LLM2_URL, corpo, scadenza, timeout,
+                         {"Authorization": f"Bearer {LLM2_KEY}"}, riprove)
+        r.raise_for_status()
+        corpo_r = r.json()
+        uso = corpo_r.get("usage") or {}
+        _uso["token_in"] += int(uso.get("prompt_tokens") or 0)
+        _uso["token_out"] += int(uso.get("completion_tokens") or 0)
+        scelta = corpo_r["choices"][0]
+        if scelta.get("finish_reason") == "length":
+            raise GeminiErrore("risposta troncata")
+        testo = scelta["message"]["content"] or ""
+    except httpx.HTTPStatusError as exc:
+        raise GeminiErrore(_dettaglio_http(exc.response)) from exc
+    except (httpx.HTTPError, KeyError, IndexError, ValueError,
+            TypeError) as exc:
+        raise GeminiErrore(type(exc).__name__) from exc
+    if not testo.strip():
+        raise GeminiErrore("risposta vuota")
+    return testo
+
+
+async def _gemini(prompt: str, *, sistema: str, schema: dict | None = None,
+                  max_token: int = 1024, temperatura: float = 0.2,
+                  scadenza: float | None = None,
+                  timeout: float = 25.0) -> str:
+    """Prova i motori in ordine fino a che uno risponde (il nome e' rimasto
+    per i test e per il registro)."""
+    scadenza = scadenza or time.time() + BUDGET
+    motori = _motori()
+    ultimo = GeminiErrore("nessun motore")
+    for n, (nome, tipo) in enumerate(motori):
+        # Con piu' motori non si aspetta sul primo: se non risponde si passa
+        # al successivo; solo l'ultimo riprova una volta.
+        riprove = (len(PAUSE_RIPROVA) if len(motori) == 1
+                   else 1 if n == len(motori) - 1 else 0)
+        comuni = dict(sistema=sistema, schema=schema, max_token=max_token,
+                      temperatura=temperatura, scadenza=scadenza,
+                      timeout=timeout, riprove=riprove)
+        try:
+            if tipo == "gemini":
+                testo = await _chiama_gemini(nome, prompt, **comuni)
+            else:
+                testo = await _chiama_esterno(prompt, **comuni)
+        except GeminiErrore as exc:
+            ultimo = exc
+            if str(exc) == "tempo esaurito":
+                break
+            if str(exc) not in ERRORI_DI_CONTENUTO:
+                _motore_guasto[nome] = time.time() + PAUSA_MOTORE_GUASTO
+            print("CHAT motore", nome, "non risponde:", exc, flush=True)
+            continue
+        _motore_guasto.pop(nome, None)
+        _per_motore[nome] = _per_motore.get(nome, 0) + 1
+        if n > 0:
+            print("CHAT risposto dalla riserva:", nome, flush=True)
+        return testo
+    raise ultimo
 
 
 AZIONI = ["cerca", "confronta", "scheda", "glossario", "saluto", "grazie",
@@ -1433,6 +1547,10 @@ async def chat_stato(request: Request):
     if request.headers.get("x-real-ip"):
         raise HTTPException(404)
     return {"modello": MODEL, "chiave": bool(API_KEY),
+            "motori": [n for n, _ in _motori()],
+            "risposte_per_motore": dict(_per_motore),
+            "motori_in_coda": [n for n, t in _motore_guasto.items()
+                               if t > time.time()],
             "schede": len(_cache["schede"]),
             "integrazioni": _cache["integrazioni"],
             "catalogo_letto_secondi_fa":

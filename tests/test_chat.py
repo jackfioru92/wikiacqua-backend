@@ -28,6 +28,8 @@ def pulito(monkeypatch):
     chat._uso.update(giorno="", per_chi={}, totale=0)
     chat._cache.update(schede=[], letto=0.0, impronta="")
     chat._interruttore.update(guasti=[], fino=0.0)
+    chat._motore_guasto.clear()
+    chat._per_motore.clear()
     yield
 
 
