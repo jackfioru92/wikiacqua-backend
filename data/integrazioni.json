@@ -1,5 +1,5 @@
 {
- "generato": "2026-10-14",
+ "generato": "2026-10-19",
  "origine": "Acque_dati_integrati_WikiAcqua.xlsx",
  "integra": {
   "4": {
@@ -170,6 +170,174 @@
    "se_ancora": 0.01,
    "valore": 13,
    "motivo": "valore scritto in g/L"
+  },
+  {
+   "id": "14",
+   "nome": "ACQUA SANTA CHIANCIANO",
+   "campo": "RESIDUO_FISSO_A_180",
+   "se_ancora": 3.2,
+   "valore": 3200,
+   "motivo": "scritto in g/L (Beverfood: 3280)"
+  },
+  {
+   "id": "14",
+   "nome": "ACQUA SANTA CHIANCIANO",
+   "campo": "CALCIO",
+   "se_ancora": 73.8,
+   "valore": 738,
+   "motivo": "virgola spostata: bilancio ionico 21% -> 4%"
+  },
+  {
+   "id": "14",
+   "nome": "ACQUA SANTA CHIANCIANO",
+   "campo": "SOLFATI",
+   "se_ancora": 1.75,
+   "valore": 1750,
+   "motivo": "scritto in g/L (Terme di Chianciano: fino a circa 1800)"
+  },
+  {
+   "id": "159",
+   "nome": "NOVELLA",
+   "campo": "RESIDUO_FISSO_A_180",
+   "se_ancora": 0.4,
+   "valore": 400,
+   "motivo": "scritto in g/L; da confermare con l'etichetta"
+  },
+  {
+   "id": "218",
+   "nome": "SOLARIA",
+   "campo": "SODIO",
+   "se_ancora": 0.01,
+   "valore": null,
+   "motivo": "valore in g/L, quello vero non si trova online"
+  },
+  {
+   "id": "55",
+   "nome": "CONTESSA",
+   "campo": "SODIO",
+   "se_ancora": 200,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "55",
+   "nome": "CONTESSA",
+   "campo": "CALCIO",
+   "se_ancora": 150,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "55",
+   "nome": "CONTESSA",
+   "campo": "MAGNESIO",
+   "se_ancora": 50,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "55",
+   "nome": "CONTESSA",
+   "campo": "BICARBONATI",
+   "se_ancora": 600,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "55",
+   "nome": "CONTESSA",
+   "campo": "SOLFATI",
+   "se_ancora": 200,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "55",
+   "nome": "CONTESSA",
+   "campo": "CLORURI",
+   "se_ancora": 200,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "55",
+   "nome": "CONTESSA",
+   "campo": "NITRATI",
+   "se_ancora": 10,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "55",
+   "nome": "CONTESSA",
+   "campo": "FLUORURI",
+   "se_ancora": 4,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "234",
+   "nome": "TOSCA",
+   "campo": "SODIO",
+   "se_ancora": 200,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "234",
+   "nome": "TOSCA",
+   "campo": "CALCIO",
+   "se_ancora": 150,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "234",
+   "nome": "TOSCA",
+   "campo": "MAGNESIO",
+   "se_ancora": 50,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "234",
+   "nome": "TOSCA",
+   "campo": "BICARBONATI",
+   "se_ancora": 600,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "234",
+   "nome": "TOSCA",
+   "campo": "SOLFATI",
+   "se_ancora": 200,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "234",
+   "nome": "TOSCA",
+   "campo": "CLORURI",
+   "se_ancora": 200,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "234",
+   "nome": "TOSCA",
+   "campo": "NITRATI",
+   "se_ancora": 10,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
+  },
+  {
+   "id": "234",
+   "nome": "TOSCA",
+   "campo": "FLUORURI",
+   "se_ancora": 4,
+   "valore": null,
+   "motivo": "segnaposto identico in Contessa e Tosca"
   },
   {
    "id": "74",

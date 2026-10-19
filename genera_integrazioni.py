@@ -9,8 +9,7 @@
 - nuove:   le acque del foglio assenti dal database, con numeri di scheda che
            non possono scontrarsi con quelli futuri del cliente
 
-Le correzioni dubbie (Santa Chianciano, Contessa, Novella, Solaria, Tosca,
-Sparea) NON sono qui: servono le etichette. Montoso e Fonte Azzurrina sono
+Sparea resta com'e': serve l'etichetta. Montoso e Fonte Azzurrina sono
 svuotate (valore null) come consiglia il foglio.
 """
 import datetime
@@ -48,6 +47,26 @@ CORREZIONI = [
     (208, "RESIDUO_FISSO_A_180", 7.4, 690, "il pH era finito nella colonna del residuo fisso"),
     (208, "PH_ALLA_SORGENTE", 2.9, 7.4, "il pH era finito nella colonna del residuo fisso"),
     (216, "SODIO", 0.01, 13, "valore scritto in g/L"),
+    # Le cinque schede rimaste incoerenti. Nessuna ha un'analisi in testo online:
+    # si corregge solo cio' che i numeri stessi dimostrano.
+    # SANTA CHIANCIANO: residuo fisso e solfati scritti in g/L e calcio con la
+    # virgola spostata. Con Ca 738 e SO4 1750 lo squilibrio ionico passa dal 21%
+    # al 4%, il residuo fisso atteso (3162) coincide con 3200 e con i 3280 di
+    # Beverfood. I valori sono dell'analisi in uso nel database, non della storica.
+    (14, "RESIDUO_FISSO_A_180", 3.2, 3200, "scritto in g/L (Beverfood: 3280)"),
+    (14, "CALCIO", 73.8, 738, "virgola spostata: bilancio ionico 21% -> 4%"),
+    (14, "SOLFATI", 1.75, 1750, "scritto in g/L (Terme di Chianciano: fino a circa 1800)"),
+    # NOVELLA: 0,40 e' g/L. Con le altre analisi il residuo fisso atteso e' >= 342.
+    (159, "RESIDUO_FISSO_A_180", 0.4, 400, "scritto in g/L; da confermare con l'etichetta"),
+    # SOLARIA: 0,01 mg/L di sodio non esiste (in altre schede era 0,01 g/L, cioe'
+    # circa 10-15 mg/L), ma il valore vero non si trova: si toglie.
+    (218, "SODIO", 0.01, None, "valore in g/L, quello vero non si trova online"),
+    # CONTESSA e TOSCA: gli stessi otto numeri tondi, identici fra loro, sono
+    # segnaposto. Si tolgono; restano residuo fisso e pH.
+    *[(i, c, v, None, "segnaposto identico in Contessa e Tosca")
+      for i in (55, 234)
+      for c, v in (("SODIO", 200), ("CALCIO", 150), ("MAGNESIO", 50), ("BICARBONATI", 600),
+                   ("SOLFATI", 200), ("CLORURI", 200), ("NITRATI", 10), ("FLUORURI", 4))],
     # Schede con numeri segnaposto: il foglio consiglia di svuotarle finche'
     # non si ha l'etichetta. Vuote non entrano nelle classifiche per sbaglio.
     *[(74, c, 0.1, None, "FONTE AZZURRINA: sette valori tutti 0,1, segnaposto")
