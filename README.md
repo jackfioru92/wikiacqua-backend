@@ -1,11 +1,30 @@
 # WikiAcqua · backend dell'assistente
 
-FastAPI sul VPS `wikideas.it` (servizio `wikiacqua-ai`, porta 8002, nginx su `/wikiacqua/ai/`).
+FastAPI sul VPS `wikideas.it` (servizio `wikiacqua-ai`, porta 8002, nginx su `/wikiacqua/ai/`, 2 worker).
+L'app è in `jackfioru92/wikiacqua-app`.
 
-- `app/chat.py` assistente (`POST /chat`), definizioni dall'Enciclopedia, `GET /catalogo`
-- `app/integrazioni.py` strato nostro sopra il database di wikiacqua.it (che è del cliente, sola lettura)
-- `app/main.py` riconoscimento etichette da foto; `main.py.server` è l'originale prima delle 3 righe che includono `chat`
-- `data/integrazioni.json` valori integrati, correzioni e acque nuove (ID da 90001), generato da `genera_integrazioni.py`
+## Cosa fa
+- `POST /chat` l'assistente. Un'IA traduce la domanda in un piano (filtri, acque, categoria), la ricerca e i
+  confronti li fa Python sul catalogo, un'IA scrive la risposta e ogni numero viene controllato: se non
+  viene dai dati, si risponde con la tabella. Domande estranee alle acque: rifiuto fisso, senza costi.
+- `GET /catalogo` il catalogo per l'app: database di wikiacqua.it più il nostro strato.
+- Le definizioni ("cos'è il residuo fisso?") si leggono dall'Enciclopedia del database, senza IA.
+- `POST /` riconoscimento delle etichette da foto (codice preesistente in `app/main.py`; `main.py.server` è
+  l'originale prima delle 3 righe che includono `chat`).
+
+## File
+- `app/chat.py` l'assistente · `app/integrazioni.py` lo strato sul database del cliente
+- `data/integrazioni.json` valori integrati, correzioni e acque nuove (ID da 90001), generato da
+  `genera_integrazioni.py` partendo dal foglio delle acque. Regola: il database vince sempre (si riempie solo
+  ciò che è vuoto, si corregge solo finché il database ha ancora il valore sbagliato).
+- `tests/` 208 test, `fixtures/` copie del catalogo e dell'Enciclopedia per le prove
+
+## Se Google non risponde
+Si provano in ordine: modello principale, due riserve Google (`GEMINI_MODELLI_RISERVA`, stessa chiave), poi un
+servizio esterno compatibile OpenAI (`LLM_RISERVA_KEY`, `LLM_RISERVA_URL`, `LLM_RISERVA_MODELLO`): oggi
+**DeepSeek è attivo**. Chi non risponde scende in fondo alla fila per 45 secondi. Per cambiare fornitore:
+`bash imposta_riserva.sh [deepseek|mistral]` (chiede la chiave nascosta, la prova, salva e riavvia).
+Limiti: 40 domande al giorno per rete, 2.000 in totale.
 
 ## Prove
 ```
@@ -14,17 +33,18 @@ venv/bin/python -m pytest -q
 ```
 
 ## Aggiornare le acque
-`python3 genera_integrazioni.py Acque_dati_integrati_WikiAcqua.xlsx`, poi copiare `data/integrazioni.json`
-in `/opt/wikiacqua-ai/catalogo/integrazioni.json`. Si rilegge da solo entro 5 minuti, senza riavvii.
+`python3 genera_integrazioni.py Acque_dati_integrati_WikiAcqua.xlsx`, poi copiare `data/integrazioni.json` in
+`/opt/wikiacqua-ai/catalogo/integrazioni.json`. Il server lo rilegge da solo entro 5 minuti, senza riavvii.
+Le correzioni stanno nella lista `CORREZIONI` dello script, con il valore sbagliato che devono trovare.
 
 ## Pubblicare
-Copiare `app/chat.py` e `app/integrazioni.py` in `/opt/wikiacqua-ai/app/` e `sudo systemctl restart wikiacqua-ai`.
-Prima salvare `chat.py` come `chat.py.bak-AAAAMMGG`. Il token del database sta in `/etc/wikiacqua-ai/chat.env`
-(non è nel repo, e non deve entrarci).
+1. Prove locali verdi.
+2. Salvare `/opt/wikiacqua-ai/app/chat.py` come `chat.py.bak-AAAAMMGG`, copiare `app/chat.py` e
+   `app/integrazioni.py` in `/opt/wikiacqua-ai/app/`, poi `sudo systemctl restart wikiacqua-ai`.
+3. Controllare `curl 127.0.0.1:8002/health` e `curl 127.0.0.1:8002/chat/stato` (motori, consumi).
+Rientro: rimettere il `.bak` e riavviare.
 
-## Se Google non risponde
-`_gemini` prova i motori in ordine: modello principale, riserve Google (`GEMINI_MODELLI_RISERVA`, stessa chiave),
-poi un servizio esterno compatibile OpenAI (`LLM_RISERVA_KEY`, `LLM_RISERVA_URL`, `LLM_RISERVA_MODELLO`).
-Chi non risponde scende in fondo alla fila per 45 secondi. `bash imposta_riserva.sh [deepseek|mistral]` salva la
-chiave sul server (la chiede nascosta, la prova prima di salvarla). Lo stato: `curl 127.0.0.1:8002/chat/stato`.
-I registri sono in `/opt/wikiacqua-ai/logs/app.log` (non in journalctl).
+## Dove sono i segreti (non sono nel repo e non devono entrarci)
+- `/etc/wikiacqua-ai/api_keys.env` chiave Google · `/etc/wikiacqua-ai/chat.env` token del database e chiave
+  del servizio di riserva (permessi 600).
+- I registri sono in `/opt/wikiacqua-ai/logs/app.log` e `error.log`, non in `journalctl`.
