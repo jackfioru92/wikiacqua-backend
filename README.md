@@ -26,7 +26,9 @@ servizi esterni compatibili OpenAI, uno per "slot" in `/etc/wikiacqua-ai/chat.en
 numero), così il credito si consuma solo se serve. Chi non risponde scende in fondo alla fila per 45 secondi.
 Per aggiungerne uno: `bash imposta_riserva.sh groq|cerebras|mistral|deepseek` (chiede la chiave nascosta, la
 prova in modalità JSON, salva solo se funziona e riavvia). Stato e motori: `curl 127.0.0.1:8002/chat/stato`.
-Oggi sono attivi Google (3 modelli) e DeepSeek. Limiti: 40 domande al giorno per rete, 2.000 in totale.
+Oggi sono attivi Google (3 modelli), Groq (`gpt-oss-120b`) e DeepSeek. Per provare una riserva con domande
+vere, senza Google: `ssh debian@57.131.42.4 "sudo /opt/wikiacqua-ai/venv/bin/python - groq" < prova_motore.py`.
+Limiti: 40 domande al giorno per rete, 2.000 in totale.
 
 ## Prove
 ```
