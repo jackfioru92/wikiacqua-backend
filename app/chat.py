@@ -825,12 +825,28 @@ def _leggi_esterni() -> list[dict]:
 
 ESTERNI = _leggi_esterni()
 PAUSA_MOTORE_GUASTO = 45.0
+# Se Google resta giu' per ore, ogni fallimento di fila raddoppia la pausa (fino
+# a 5 minuti): altrimenti una domanda ogni 45 secondi perderebbe 30 secondi in
+# timeout prima di arrivare alla riserva.
+PAUSA_MASSIMA = 300.0
+# Chi ha fallito di recente, quando lo si riprova, ha poco tempo: se dopo c'e'
+# un altro motore non si aspetta.
+TIMEOUT_SOSPETTO = 5.0
 
 _motore_guasto: dict[str, float] = {}   # nome -> fino a quando va in fondo alla fila
+_guasti_di_fila: dict[str, int] = {}    # nome -> fallimenti consecutivi
 _per_motore: dict[str, int] = {}        # risposte date da ciascun motore
 # Errori della risposta e non del servizio: non dicono che il motore e' giu'.
 ERRORI_DI_CONTENUTO = {"risposta vuota", "risposta troncata", "KeyError",
                        "IndexError", "ValueError", "TypeError"}
+
+
+def _tempo_per(nome: str, timeout: float, ultimo: bool) -> float:
+    """Il tempo concesso a un motore: breve se e' gia' fallito di recente e dopo
+    di lui ce n'e' un altro, intero se e' l'ultima speranza."""
+    if _guasti_di_fila.get(nome) and not ultimo:
+        return min(timeout, TIMEOUT_SOSPETTO)
+    return timeout
 
 
 def _motori() -> list[tuple[str, str]]:
@@ -962,7 +978,8 @@ async def _gemini(prompt: str, *, sistema: str, schema: dict | None = None,
                    else 1 if n == len(motori) - 1 else 0)
         comuni = dict(sistema=sistema, schema=schema, max_token=max_token,
                       temperatura=temperatura, scadenza=scadenza,
-                      timeout=timeout, riprove=riprove)
+                      timeout=_tempo_per(nome, timeout, n == len(motori) - 1),
+                      riprove=riprove)
         try:
             if tipo == "gemini":
                 testo = await _chiama_gemini(nome, prompt, **comuni)
@@ -974,10 +991,13 @@ async def _gemini(prompt: str, *, sistema: str, schema: dict | None = None,
             if str(exc) == "tempo esaurito":
                 break
             if str(exc) not in ERRORI_DI_CONTENUTO:
-                _motore_guasto[nome] = time.time() + PAUSA_MOTORE_GUASTO
+                di_fila = _guasti_di_fila[nome] = _guasti_di_fila.get(nome, 0) + 1
+                pausa = min(PAUSA_MOTORE_GUASTO * 2 ** (di_fila - 1), PAUSA_MASSIMA)
+                _motore_guasto[nome] = time.time() + pausa
             print("CHAT motore", nome, "non risponde:", exc, flush=True)
             continue
         _motore_guasto.pop(nome, None)
+        _guasti_di_fila.pop(nome, None)
         _per_motore[nome] = _per_motore.get(nome, 0) + 1
         if n > 0:
             print("CHAT risposto dalla riserva:", nome, flush=True)

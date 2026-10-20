@@ -29,6 +29,7 @@ def pulito(monkeypatch):
     chat._cache.update(schede=[], grezzo=[], letto=0.0, impronta="", integrazioni={})
     chat._interruttore.update(guasti=[], fino=0.0)
     chat._motore_guasto.clear()
+    chat._guasti_di_fila.clear()
     chat._per_motore.clear()
     monkeypatch.setattr(chat, "PAUSE_RIPROVA", (0.0, 0.0))
     yield
@@ -277,3 +278,57 @@ def test_gli_extra_si_leggono_dall_ambiente_e_un_json_rotto_si_ignora(monkeypatc
     assert chat._leggi_esterni()[0]["extra"] == {}
     monkeypatch.setenv("LLM_RISERVA2_EXTRA", "[1, 2]")
     assert chat._leggi_esterni()[0]["extra"] == {}
+
+
+# --- Google che non risponde per ore: non far pagare l'attesa a ogni domanda ---
+
+def _timeout(req):
+    raise httpx.ReadTimeout("lento", request=req)
+
+
+def test_chi_continua_a_non_rispondere_resta_in_fondo_sempre_piu_a_lungo(monkeypatch):
+    monkeypatch.setattr(chat, "RISERVE_GEMINI", ["modello-riserva"])
+    orologio = [1000.0]
+    monkeypatch.setattr(chat.time, "time", lambda: orologio[0])
+    _rete(monkeypatch, [("modello-riserva", _g("riserva")), (chat.MODEL, GIU)])
+    pause = []
+    for _ in range(6):
+        chiedi()
+        pause.append(chat._motore_guasto[chat.MODEL] - orologio[0])
+        orologio[0] += pause[-1] + 1                    # scade la pausa: riprova e fallisce ancora
+    assert pause[0] == chat.PAUSA_MOTORE_GUASTO
+    assert pause[1] == 2 * pause[0] and pause[2] == 4 * pause[0]    # raddoppia
+    assert max(pause) == chat.PAUSA_MASSIMA                         # ma non cresce all'infinito
+
+
+def test_quando_torna_su_la_pausa_riparte_dall_inizio(monkeypatch):
+    monkeypatch.setattr(chat, "RISERVE_GEMINI", ["modello-riserva"])
+    orologio = [1000.0]
+    monkeypatch.setattr(chat.time, "time", lambda: orologio[0])
+    stato = {"giu": True}
+    _rete(monkeypatch, [("modello-riserva", _g("riserva")),
+                        (chat.MODEL, lambda r: GIU if stato["giu"] else _g("principale"))])
+    for _ in range(3):
+        chiedi()
+        orologio[0] += chat._motore_guasto[chat.MODEL] - orologio[0] + 1
+    stato["giu"] = False
+    assert chiedi() == "principale"
+    assert chat.MODEL not in chat._motore_guasto and chat.MODEL not in chat._guasti_di_fila
+
+
+def test_un_motore_sospetto_ha_poco_tempo_per_rispondere_se_ce_ne_sono_altri(monkeypatch):
+    monkeypatch.setattr(chat, "RISERVE_GEMINI", ["modello-riserva"])
+    # il motore e' gia' fallito: la prova successiva e' breve, solo se dopo c'e' un altro motore
+    chat._guasti_di_fila[chat.MODEL] = 1
+    assert chat._tempo_per(chat.MODEL, 25.0, ultimo=False) == chat.TIMEOUT_SOSPETTO
+    assert chat._tempo_per(chat.MODEL, 25.0, ultimo=True) == 25.0     # e' l'unica speranza: tutto il tempo
+    assert chat._tempo_per("modello-riserva", 25.0, ultimo=False) == 25.0   # chi funziona non cambia
+    assert chat._tempo_per(chat.MODEL, 2.0, ultimo=False) == 2.0       # mai piu' del tempo dato
+
+
+def test_google_che_va_in_timeout_non_fa_aspettare_le_domande_dopo_la_prima(monkeypatch):
+    monkeypatch.setattr(chat, "RISERVE_GEMINI", ["modello-riserva"])
+    visti = _rete(monkeypatch, [("modello-riserva", _g("riserva")), (chat.MODEL, _timeout)])
+    assert chiedi() == "riserva"
+    assert chiedi() == "riserva" and chiedi() == "riserva"
+    assert len([v for v in visti if chat.MODEL in v[0]]) == 1
