@@ -17,14 +17,16 @@ L'app è in `jackfioru92/wikiacqua-app`.
 - `data/integrazioni.json` valori integrati, correzioni e acque nuove (ID da 90001), generato da
   `genera_integrazioni.py` partendo dal foglio delle acque. Regola: il database vince sempre (si riempie solo
   ciò che è vuoto, si corregge solo finché il database ha ancora il valore sbagliato).
-- `tests/` 208 test, `fixtures/` copie del catalogo e dell'Enciclopedia per le prove
+- `tests/` 216 test, `fixtures/` copie del catalogo e dell'Enciclopedia per le prove
 
 ## Se Google non risponde
-Si provano in ordine: modello principale, due riserve Google (`GEMINI_MODELLI_RISERVA`, stessa chiave), poi un
-servizio esterno compatibile OpenAI (`LLM_RISERVA_KEY`, `LLM_RISERVA_URL`, `LLM_RISERVA_MODELLO`): oggi
-**DeepSeek è attivo**. Chi non risponde scende in fondo alla fila per 45 secondi. Per cambiare fornitore:
-`bash imposta_riserva.sh [deepseek|mistral]` (chiede la chiave nascosta, la prova, salva e riavvia).
-Limiti: 40 domande al giorno per rete, 2.000 in totale.
+Si provano in ordine: modello principale, due riserve Google (`GEMINI_MODELLI_RISERVA`, stessa chiave), poi i
+servizi esterni compatibili OpenAI, uno per "slot" in `/etc/wikiacqua-ai/chat.env` (`LLM_RISERVA<n>_KEY`, `_URL`,
+`_MODELLO`): prima i gratuiti (slot 2 Groq, 3 Cerebras, 4 Mistral), per ultimo DeepSeek (a pagamento, slot senza
+numero), così il credito si consuma solo se serve. Chi non risponde scende in fondo alla fila per 45 secondi.
+Per aggiungerne uno: `bash imposta_riserva.sh groq|cerebras|mistral|deepseek` (chiede la chiave nascosta, la
+prova in modalità JSON, salva solo se funziona e riavvia). Stato e motori: `curl 127.0.0.1:8002/chat/stato`.
+Oggi sono attivi Google (3 modelli) e DeepSeek. Limiti: 40 domande al giorno per rete, 2.000 in totale.
 
 ## Prove
 ```

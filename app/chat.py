@@ -758,16 +758,38 @@ PAUSE_RIPROVA = (1.5, 4.0)
 # Motori di riserva. Se quello principale non risponde la domanda passa al
 # successivo invece di fallire. Si configurano da ambiente:
 #   GEMINI_MODELLI_RISERVA  altri modelli Google, stessa chiave (separati da virgola)
-#   LLM_RISERVA_KEY         chiave di un servizio esterno compatibile OpenAI
-#                           (DeepSeek, Mistral, Groq...); senza chiave non si usa
-#   LLM_RISERVA_URL, LLM_RISERVA_MODELLO
+#   LLM_RISERVA<n>_KEY      chiave di un servizio esterno compatibile OpenAI
+#                           (Groq, Cerebras, Mistral, DeepSeek...); senza chiave
+#                           non si usa. Slot 2, 3, 4 (i gratuiti) si provano per
+#                           primi; lo slot senza numero (DeepSeek, a pagamento)
+#                           per ultimo, cosi' il credito si consuma solo se serve.
+#   LLM_RISERVA<n>_URL, LLM_RISERVA<n>_MODELLO
 RISERVE_GEMINI = [m.strip() for m in os.environ.get(
     "GEMINI_MODELLI_RISERVA", "gemini-3.1-flash-lite-preview,gemini-3.5-flash"
 ).split(",") if m.strip()]
-LLM2_KEY = os.environ.get("LLM_RISERVA_KEY", "")
-LLM2_URL = os.environ.get("LLM_RISERVA_URL",
-                          "https://api.deepseek.com/chat/completions")
-LLM2_MODELLO = os.environ.get("LLM_RISERVA_MODELLO", "deepseek-chat")
+
+
+def _esterno(chiave: str, url: str, modello: str) -> dict:
+    host = re.sub(r"^https?://", "", url).split("/")[0]
+    fornitore = host.split(".")[-2] if host.count(".") else host   # api.groq.com -> groq
+    return {"nome": f"{fornitore}/{modello}", "key": chiave, "url": url,
+            "modello": modello}
+
+
+def _leggi_esterni() -> list[dict]:
+    voci = []
+    for n in ("2", "3", "4", ""):
+        chiave = os.environ.get(f"LLM_RISERVA{n}_KEY", "")
+        url = os.environ.get(f"LLM_RISERVA{n}_URL",
+                             "https://api.deepseek.com/chat/completions" if n == "" else "")
+        modello = os.environ.get(f"LLM_RISERVA{n}_MODELLO",
+                                 "deepseek-chat" if n == "" else "")
+        if chiave and url and modello:
+            voci.append(_esterno(chiave, url, modello))
+    return voci
+
+
+ESTERNI = _leggi_esterni()
 PAUSA_MOTORE_GUASTO = 45.0
 
 _motore_guasto: dict[str, float] = {}   # nome -> fino a quando va in fondo alla fila
@@ -783,8 +805,7 @@ def _motori() -> list[tuple[str, str]]:
     vanno subito alla riserva, senza perdere secondi."""
     elenco = [(MODEL, "gemini")]
     elenco += [(m, "gemini") for m in RISERVE_GEMINI if m != MODEL]
-    if LLM2_KEY:
-        elenco.append((LLM2_MODELLO, "esterno"))
+    elenco += [(e["nome"], "esterno") for e in ESTERNI]
     adesso = time.time()
     return sorted(elenco, key=lambda m: _motore_guasto.get(m[0], 0.0) > adesso)
 
@@ -850,7 +871,7 @@ async def _chiama_gemini(modello: str, prompt: str, *, sistema: str,
     return testo
 
 
-async def _chiama_esterno(prompt: str, *, sistema: str, schema: dict | None,
+async def _chiama_esterno(e: dict, prompt: str, *, sistema: str, schema: dict | None,
                           max_token: int, temperatura: float,
                           scadenza: float, timeout: float,
                           riprove: int) -> str:
@@ -862,15 +883,15 @@ async def _chiama_esterno(prompt: str, *, sistema: str, schema: dict | None,
         sistema += ("\n\nRispondi SOLO con un oggetto JSON valido, senza altro "
                     "testo. Struttura (JSON Schema): "
                     + json.dumps(schema, ensure_ascii=False))
-    corpo = {"model": LLM2_MODELLO, "temperature": temperatura,
+    corpo = {"model": e["modello"], "temperature": temperatura,
              "max_tokens": max_token,
              "messages": [{"role": "system", "content": sistema},
                           {"role": "user", "content": prompt}]}
     if schema:
         corpo["response_format"] = {"type": "json_object"}
     try:
-        r = await _invia(LLM2_URL, corpo, scadenza, timeout,
-                         {"Authorization": f"Bearer {LLM2_KEY}"}, riprove)
+        r = await _invia(e["url"], corpo, scadenza, timeout,
+                         {"Authorization": f"Bearer {e['key']}"}, riprove)
         r.raise_for_status()
         corpo_r = r.json()
         uso = corpo_r.get("usage") or {}
@@ -911,7 +932,8 @@ async def _gemini(prompt: str, *, sistema: str, schema: dict | None = None,
             if tipo == "gemini":
                 testo = await _chiama_gemini(nome, prompt, **comuni)
             else:
-                testo = await _chiama_esterno(prompt, **comuni)
+                spec = next(x for x in ESTERNI if x["nome"] == nome)
+                testo = await _chiama_esterno(spec, prompt, **comuni)
         except GeminiErrore as exc:
             ultimo = exc
             if str(exc) == "tempo esaurito":

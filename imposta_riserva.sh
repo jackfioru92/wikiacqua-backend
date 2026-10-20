@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# Collega il servizio di riserva dell'assistente (si usa quando Google non risponde).
-#   bash imposta_riserva.sh [deepseek|mistral]      (predefinito: deepseek)
+# Collega un servizio di riserva dell'assistente (si usa quando Google non risponde).
+#   bash imposta_riserva.sh groq|cerebras|mistral|deepseek
+# Gratuiti (provati per primi): groq, cerebras, mistral. A pagamento (per ultimo): deepseek.
 # La chiave la digiti tu: non si vede, non resta nella cronologia, non passa dalla chat
 # e viene scritta solo in /etc/wikiacqua-ai/chat.env sul server (permessi 600).
-# Prima di salvarla la prova con una chiamata vera: se non va, non cambia nulla.
+# Prima di salvarla la prova con una chiamata vera, in modalita' JSON come fa l'assistente:
+# se non va, non cambia nulla.
 set -euo pipefail
 HOST=debian@57.131.42.4
-FORNITORE="${1:-deepseek}"
+FORNITORE="${1:-}"
 case "$FORNITORE" in
-  deepseek) URL="https://api.deepseek.com/chat/completions"; MODELLO="deepseek-chat" ;;
-  mistral)  URL="https://api.mistral.ai/v1/chat/completions"; MODELLO="mistral-small-latest" ;;
-  *) echo "Fornitore sconosciuto: $FORNITORE (deepseek o mistral)"; exit 1 ;;
+  groq)     SLOT=2;  BASE="https://api.groq.com/openai/v1";  PREDEFINITO="llama-3.3-70b-versatile" ;;
+  cerebras) SLOT=3;  BASE="https://api.cerebras.ai/v1";      PREDEFINITO="llama-3.3-70b" ;;
+  mistral)  SLOT=4;  BASE="https://api.mistral.ai/v1";       PREDEFINITO="mistral-small-latest" ;;
+  deepseek) SLOT="";  BASE="https://api.deepseek.com/v1";    PREDEFINITO="deepseek-chat" ;;
+  *) echo "Uso: bash imposta_riserva.sh groq|cerebras|mistral|deepseek"; exit 1 ;;
 esac
 read -r -s -p "Chiave API di $FORNITORE: " KEY; echo
 [ -n "$KEY" ] || { echo "Chiave vuota."; exit 1; }
@@ -19,29 +23,48 @@ read -r -s -p "Chiave API di $FORNITORE: " KEY; echo
 SCRIPT=$(cat <<PY
 import json, os, sys, urllib.request, urllib.error
 k = sys.stdin.read().strip()
-URL, MODELLO = "$URL", "$MODELLO"
-req = urllib.request.Request(URL, data=json.dumps({"model": MODELLO, "max_tokens": 5,
-    "messages": [{"role": "user", "content": "ciao"}]}).encode(),
-    headers={"Authorization": "Bearer " + k, "Content-Type": "application/json"})
+BASE, PRED, SLOT, FORN = "$BASE", "$PREDEFINITO", "$SLOT", "$FORNITORE"
+URL = BASE + "/chat/completions"
+def chiama(url, corpo=None):
+    req = urllib.request.Request(url, data=json.dumps(corpo).encode() if corpo else None,
+        headers={"Authorization": "Bearer " + k, "Content-Type": "application/json", "User-Agent": "wikiacqua-ai"})
+    return json.load(urllib.request.urlopen(req, timeout=30))
+# 1. quali modelli ha: se il predefinito non c e si sceglie un llama grande
+modello = PRED
 try:
-    r = urllib.request.urlopen(req, timeout=30)
-    print("prova del servizio: HTTP", r.status, "- risponde")
+    ids = [m["id"] for m in chiama(BASE + "/models").get("data", [])]
+    if ids and PRED not in ids:
+        grandi = [i for i in ids if "llama" in i.lower() and "70b" in i.lower()]
+        modello = (grandi or [i for i in ids if "llama" in i.lower()] or ids)[0]
+        print("modello predefinito non disponibile, uso:", modello)
+except Exception as e:
+    print("elenco modelli non disponibile (" + type(e).__name__ + "): uso", PRED)
+# 2. prova vera in modalita JSON, come fa l assistente
+try:
+    r = chiama(URL, {"model": modello, "max_tokens": 40, "temperature": 0,
+        "response_format": {"type": "json_object"},
+        "messages": [{"role": "system", "content": "Rispondi solo con un oggetto JSON."},
+                     {"role": "user", "content": "Rispondi con {\"ok\": true}"}]})
+    testo = r["choices"][0]["message"]["content"]
+    json.loads(testo)
+    print("prova del servizio: risponde in JSON (" + modello + ")")
 except urllib.error.HTTPError as e:
-    print("prova del servizio: HTTP", e.code, "- chiave non valida o credito esaurito: non salvo nulla")
+    print("prova del servizio: HTTP", e.code, "- chiave non valida, credito/limite esaurito o JSON non supportato: non salvo nulla")
     sys.exit(2)
 except Exception as e:
     print("prova del servizio non riuscita:", type(e).__name__, "- non salvo nulla")
     sys.exit(3)
+# 3. si salva nello slot del fornitore, senza toccare gli altri
 p = "/etc/wikiacqua-ai/chat.env"
-tieni = [l for l in open(p).read().splitlines()
-         if not l.startswith(("LLM_RISERVA_KEY=", "LLM_RISERVA_URL=", "LLM_RISERVA_MODELLO="))]
-tieni += ["LLM_RISERVA_KEY=" + k, "LLM_RISERVA_URL=" + URL, "LLM_RISERVA_MODELLO=" + MODELLO]
+pref = "LLM_RISERVA" + SLOT + "_"
+tieni = [l for l in open(p).read().splitlines() if not l.startswith((pref + "KEY=", pref + "URL=", pref + "MODELLO="))]
+tieni += [pref + "KEY=" + k, pref + "URL=" + URL, pref + "MODELLO=" + modello]
 open(p, "w").write("\n".join(tieni) + "\n")
 os.chmod(p, 0o600)
-print("salvata in", p)
+print("salvato in", p, "(slot", SLOT or "senza numero" + ")")
 PY
 )
 printf '%s' "$KEY" | ssh -o BatchMode=yes "$HOST" "sudo python3 -c '$SCRIPT'"
 unset KEY
 ssh -o BatchMode=yes "$HOST" 'sudo systemctl restart wikiacqua-ai; sleep 4; systemctl is-active wikiacqua-ai; curl -sS -m 10 http://127.0.0.1:8002/chat/stato | python3 -c "import sys,json; print(\"motori in ordine:\", json.load(sys.stdin)[\"motori\"])"'
-echo; echo "Fatto: se Google non risponde, l'assistente passa da solo al servizio di riserva."
+echo; echo "Fatto: se Google non risponde, l'assistente prova anche $FORNITORE."
