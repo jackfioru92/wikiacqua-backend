@@ -497,17 +497,32 @@ CLASSI = {
 
 # ------------------------------------------------------------------ ricerca
 
+SANTI = ("SANTA", "SANTO", "SANT", "SAN")
+
+
+def _chiavi(nome: str) -> set[str]:
+    """La chiave del nome e le sue forme con San/Santa/Sant/Santo scritto "S":
+    nel catalogo molte acque sono "S.PELLEGRINO" o "S.LUCIA", mentre chi chiede
+    scrive "San Pellegrino". Il confronto vale se una qualsiasi forma coincide."""
+    k = _chiave(nome)
+    return {k} | {"S" + k[len(p):] for p in SANTI
+                  if k.startswith(p) and len(k) - len(p) >= 3}
+
+
 def trova(nome: str, schede: list[dict]) -> list[dict]:
     """Le schede che corrispondono a un nome scritto dall'utente."""
     k = _chiave(nome)
     if len(k) < 3:
         return []
-    esatte = [s for s in schede if _chiave(s["nome"]) == k]
+    voluti = _chiavi(nome)
+    esatte = [s for s in schede if voluti & _chiavi(s["nome"])]
     if esatte:
         return esatte
     if len(k) < 5:
         return []
-    return [s for s in schede if _chiave(s["nome"]).startswith(k)]
+    inizi = tuple(v for v in voluti if len(v) >= 5)
+    return [s for s in schede
+            if any(c.startswith(inizi) for c in _chiavi(s["nome"]))]
 
 
 def regione_valida(nome: str, schede: list[dict]) -> str | None:
@@ -528,7 +543,7 @@ def esegui(piano: dict, schede: list[dict]) -> dict:
             if not ris:
                 non_trovate.append(nome)
             elif len(ris) > 1 and not any(
-                    _chiave(s["nome"]) == _chiave(nome) for s in ris):
+                    _chiavi(s["nome"]) & _chiavi(nome) for s in ris):
                 # Il nome e' solo l'inizio di piu' acque ("San Benedetto"):
                 # scegliere al posto dell'utente sarebbe un'invenzione.
                 ambigue.append((nome, [s["nome"] for s in ris]))
@@ -613,6 +628,11 @@ def _parole(testo: str) -> list[str]:
     return re.sub(r"[^a-z0-9]+", " ", t.lower()).split()
 
 
+def _sigla(parola: str) -> str:
+    """"san", "santa", "sant", "santo" valgono "s" (come "S.PELLEGRINO")."""
+    return "s" if parola in ("san", "santa", "sant", "santo") else parola
+
+
 def _parole_nome(nome: str) -> list[str]:
     p = _parole(nome)
     return p[1:] if p and p[0] == "acqua" else p
@@ -621,12 +641,14 @@ def _parole_nome(nome: str) -> list[str]:
 def _nomi_citati(parole: list[str], schede: list[dict]):
     """Le acque il cui nome compare per intero nella domanda."""
     trovati = []
+    scritte = [_sigla(w) for w in parole]
     for s in schede:
         nt = _parole_nome(s["nome"])
         if not nt:
             continue
+        nt_sigla = [_sigla(w) for w in nt]
         for i in range(len(parole) - len(nt) + 1):
-            if parole[i:i + len(nt)] != nt:
+            if scritte[i:i + len(nt)] != nt_sigla:
                 continue
             # un nome corto e secco ("Viva", "Eva") e' anche una parola
             # comune: vale solo se scritto "acqua viva"

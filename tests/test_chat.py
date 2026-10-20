@@ -790,6 +790,42 @@ def test_un_nome_che_inizia_una_sola_acqua_viene_risolto():
         "SANTA CROCE Sorgente Fiuggino"]
 
 
+@pytest.mark.parametrize("scritto,atteso", [
+    ("San Pellegrino", "S.PELLEGRINO"),
+    ("Sanpellegrino", "S.PELLEGRINO"),
+    ("S. Pellegrino", "S.PELLEGRINO"),
+    ("san francesco", "S.FRANCESCO"),
+    ("Santa Lucia", "S.LUCIA"),
+    ("San Giorgio", "S.GIORGIO"),
+    ("Sant'Antonio", "S.ANTONIO"),
+    ("San Antonio", "S.ANTONIO"),
+])
+def test_san_e_s_puntato_sono_lo_stesso_nome(scritto, atteso):
+    # Nel catalogo molte acque sono "S.PELLEGRINO", "S.LUCIA": chi scrive "San
+    # Pellegrino" la deve trovare, non sentirsi dire che non esiste.
+    schede = asyncio.run(chat.catalogo())
+    assert [s["nome"] for s in chat.trova(scritto, schede)] == [atteso]
+
+
+def test_il_sinonimo_di_san_non_crea_ambiguita_ne_false_corrispondenze():
+    schede = asyncio.run(chat.catalogo())
+    # le abbreviazioni non fanno trovare acque che non c'entrano
+    assert chat.trova("San Marino", schede) == []
+    assert chat.trova("Santo Domingo", schede) == []
+    # ogni acqua del catalogo continua a trovare solo se' stessa (o l'esatta)
+    for s in schede:
+        trovate = chat.trova(s["nome"], schede)
+        assert s["id"] in [t["id"] for t in trovate], s["nome"]
+        assert len({chat._chiave(t["nome"]) for t in trovate}) == 1, s["nome"]
+
+
+def test_il_ripiego_capisce_san_pellegrino():
+    p = _piano("quanto magnesio c'è nella San Pellegrino?")
+    assert p["azione"] == "scheda" and p["acque"] == ["S.PELLEGRINO"]
+    p = _piano("Confronta San Pellegrino e Levissima")
+    assert p["azione"] == "confronta" and p["acque"] == ["S.PELLEGRINO", "LEVISSIMA"]
+
+
 def test_un_nome_esatto_non_e_ambiguo_anche_se_ha_varianti_piu_lunghe(client, monkeypatch):
     # 'Levissima' esiste esatta, e c'e' anche 'Levissima Issima': vale l'esatta.
     schede = asyncio.run(chat.catalogo())
