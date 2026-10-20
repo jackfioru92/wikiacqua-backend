@@ -254,3 +254,26 @@ def test_uno_slot_incompleto_si_ignora(monkeypatch):
                                         ("http://localhost:8080/v1/chat/completions", "localhost:8080/m")])
 def test_il_nome_del_motore_dice_chi_e(url, atteso):
     assert chat._esterno("k", url, "m")["nome"] == atteso
+
+
+def test_i_parametri_extra_del_servizio_arrivano_nella_richiesta(monkeypatch):
+    monkeypatch.setattr(chat, "RISERVE_GEMINI", [])
+    monkeypatch.setattr(chat, "ESTERNI", [chat._esterno("k", "https://api.groq.com/openai/v1/chat/completions",
+                                                         "openai/gpt-oss-120b", {"reasoning_effort": "low"})])
+    visti = _rete(monkeypatch, [("generateContent", GIU), ("groq.com", _openai("ok"))])
+    chiedi()
+    assert visti[-1][2]["reasoning_effort"] == "low" and visti[-1][2]["model"] == "openai/gpt-oss-120b"
+
+
+def test_gli_extra_si_leggono_dall_ambiente_e_un_json_rotto_si_ignora(monkeypatch):
+    for k in ("LLM_RISERVA_KEY", "LLM_RISERVA2_KEY", "LLM_RISERVA3_KEY", "LLM_RISERVA4_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("LLM_RISERVA2_KEY", "k")
+    monkeypatch.setenv("LLM_RISERVA2_URL", "https://api.groq.com/openai/v1/chat/completions")
+    monkeypatch.setenv("LLM_RISERVA2_MODELLO", "m")
+    monkeypatch.setenv("LLM_RISERVA2_EXTRA", '{"reasoning_effort": "low"}')
+    assert chat._leggi_esterni()[0]["extra"] == {"reasoning_effort": "low"}
+    monkeypatch.setenv("LLM_RISERVA2_EXTRA", "{non e json")
+    assert chat._leggi_esterni()[0]["extra"] == {}
+    monkeypatch.setenv("LLM_RISERVA2_EXTRA", "[1, 2]")
+    assert chat._leggi_esterni()[0]["extra"] == {}

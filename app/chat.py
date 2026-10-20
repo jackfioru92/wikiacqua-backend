@@ -769,11 +769,23 @@ RISERVE_GEMINI = [m.strip() for m in os.environ.get(
 ).split(",") if m.strip()]
 
 
-def _esterno(chiave: str, url: str, modello: str) -> dict:
+def _esterno(chiave: str, url: str, modello: str,
+             extra: dict | None = None) -> dict:
     host = re.sub(r"^https?://", "", url).split("/")[0]
     fornitore = host.split(".")[-2] if host.count(".") else host   # api.groq.com -> groq
     return {"nome": f"{fornitore}/{modello}", "key": chiave, "url": url,
-            "modello": modello}
+            "modello": modello, "extra": extra or {}}
+
+
+def _extra(n: str) -> dict:
+    """Parametri in piu' per un servizio (LLM_RISERVA<n>_EXTRA, JSON), ad
+    esempio {"reasoning_effort": "low"} per i modelli che ragionano: senza,
+    consumano i token di risposta pensando e il JSON arriva tagliato."""
+    try:
+        v = json.loads(os.environ.get(f"LLM_RISERVA{n}_EXTRA", "") or "{}")
+    except ValueError:
+        return {}
+    return v if isinstance(v, dict) else {}
 
 
 def _leggi_esterni() -> list[dict]:
@@ -785,7 +797,7 @@ def _leggi_esterni() -> list[dict]:
         modello = os.environ.get(f"LLM_RISERVA{n}_MODELLO",
                                  "deepseek-chat" if n == "" else "")
         if chiave and url and modello:
-            voci.append(_esterno(chiave, url, modello))
+            voci.append(_esterno(chiave, url, modello, _extra(n)))
     return voci
 
 
@@ -889,6 +901,7 @@ async def _chiama_esterno(e: dict, prompt: str, *, sistema: str, schema: dict | 
                           {"role": "user", "content": prompt}]}
     if schema:
         corpo["response_format"] = {"type": "json_object"}
+    corpo.update(e.get("extra") or {})
     try:
         r = await _invia(e["url"], corpo, scadenza, timeout,
                          {"Authorization": f"Bearer {e['key']}"}, riprove)
